@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16
+    container_name: forkliftplus-db
+    environment:
+      POSTGRES_USER: forklift
+      POSTGRES_PASSWORD: forklift
+      POSTGRES_DB: forkliftplus
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./database/postgres:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: forkliftplus-mailhog
+    ports:
+      - "1025:1025"
+      - "8025:8025"
