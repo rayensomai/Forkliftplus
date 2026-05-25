@@ -3,4 +3,7 @@ uvicorn[standard]==0.30.3
 SQLAlchemy==2.0.32
 pydantic-settings==2.4.0
 httpx==0.28.1
-psycopg[binary]==3.2.1
+aiosmtpd==1.4.6
+
+# Optional — only if you use PostgreSQL instead of SQLite:
+# psycopg[binary]>=3.3.4

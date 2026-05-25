@@ -13,6 +13,9 @@ class Settings(BaseSettings):
   smtp_password: str = ""
   smtp_use_tls: bool = False
   smtp_from_email: str = "no-reply@forkliftplus.com"
+  app_env: str = "development"
+  dev_mail_enabled: bool = True
+  dev_mail_port: int = 1025
 
 
 settings = Settings()

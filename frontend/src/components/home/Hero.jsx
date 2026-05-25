@@ -19,6 +19,9 @@ function Hero({ copy }) {
           <a className="btn ghost" href="#catalog">
             {copy.hero.secondaryCta}
           </a>
+          <Link className="btn ghost" to="/location">
+            {copy.hero.rentalCta}
+          </Link>
         </div>
         <div className="hero-metrics">
           {copy.hero.metrics.map((metric, index) => (

@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { useCart } from '../../context/CartContext.jsx'
+import { useClientAuth } from '../../context/ClientAuthContext.jsx'
 import {
   getCategoryImageUrl,
   getProductImageUrl,
@@ -8,6 +10,7 @@ import {
   getExclusiveCatalogProducts,
   isExclusiveCategory,
 } from '../../data/exclusiveCatalogs.js'
+import ForkliftRecommender from './ForkliftRecommender.jsx'
 
 const INVENTORY_TARGET = 10000
 
@@ -32,7 +35,8 @@ function buildLargeInventory(products, categories, locale) {
   if (!products?.length) return []
 
   const seriesLabel = locale === 'fr-CA' ? 'Serie' : 'Series'
-  const availability = ['Disponible', 'Sur commande']
+  const availability =
+    locale === 'fr-CA' ? ['Disponible', 'Sur commande'] : ['Available', 'On order']
 
   return Array.from({ length: INVENTORY_TARGET }, (_, index) => {
     const base = products[index % products.length]
@@ -41,6 +45,7 @@ function buildLargeInventory(products, categories, locale) {
 
     return {
       ...base,
+      id: `product-${index + 1}`,
       name: `${base.name} ${seriesLabel} ${index + 1}`,
       price: Math.max(1200, base.price + multiplier * 450),
       status: availability[index % availability.length],
@@ -60,7 +65,11 @@ function buildCatalogInventory(products, categories, locale) {
 }
 
 function ProductCatalog({ copy }) {
+  const { addItem } = useCart()
+  const { isClientAuthed } = useClientAuth()
+  const navigate = useNavigate()
   const [query, setQuery] = useState('')
+  const [addedId, setAddedId] = useState(null)
   const [categoryKey, setCategoryKey] = useState('')
   const [status, setStatus] = useState('all')
   const [priceBand, setPriceBand] = useState('all')
@@ -150,6 +159,30 @@ function ProductCatalog({ copy }) {
     setWorkType('all')
   }
 
+  const handleViewRecommendedProduct = (product) => {
+    setCategoryKey(product.categoryKey)
+    setTerrain(product.terrain)
+    setWorkType(product.workType)
+    setCapacityBand(
+      product.capacity <= 5000 ? 'under-5k' : product.capacity <= 10000 ? '5k-10k' : '10k-plus'
+    )
+    setQuery(product.name.split(' ').slice(0, 3).join(' '))
+    window.setTimeout(() => {
+      document.getElementById('catalog')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 60)
+  }
+
+  const handleAddToCart = (product) => {
+    if (!isClientAuthed) {
+      navigate('/client/compte?redirect=/')
+      return
+    }
+
+    addItem(product)
+    setAddedId(product.id)
+    window.setTimeout(() => setAddedId(null), 1800)
+  }
+
   const handleImageError = (event, fallbackLabel) => {
     const target = event.currentTarget
     const nextSource = target.dataset.fallbackSrc
@@ -183,50 +216,63 @@ function ProductCatalog({ copy }) {
       </div>
 
       {!selectedCategory ? (
-        <div className="category-grid">
-          {copy.categories.map((category, index) => {
-            const theme = CATEGORY_THEMES[category.key] ?? CATEGORY_THEMES['forklift-propane']
-            return (
-              <button
-                key={category.key}
-                type="button"
-                className={`category-card reveal delay-${(index % 6) + 1}`}
-                style={{
-                  '--card-accent': theme.accent,
-                  '--card-accent-2': theme.accent2,
-                }}
-                onClick={() => setCategoryKey(category.key)}
-              >
-                <span className="category-card-shine" aria-hidden="true" />
-                <div className="category-card-media">
-                  <img
-                    src={category.image ?? getCategoryImageUrl(category.key)}
-                    data-fallback-src={getCategoryImageUrl(category.key)}
-                    alt={category.label}
-                    loading="lazy"
-                    onError={(event) => handleImageError(event, category.label)}
-                  />
-                  <span className="category-card-icon" aria-hidden="true">
-                    {theme.icon}
-                  </span>
-                </div>
-                <div className="category-card-body">
-                  <span className="category-card-count">
-                    {categoryCounts[category.key] ?? 0}
-                  </span>
-                  <strong>{category.label}</strong>
-                  <p>{category.description}</p>
-                  <span className="category-card-cta">
-                    {copy.exploreCta}
-                    <span className="category-card-arrow" aria-hidden="true">
-                      →
+        <>
+          <div className="category-grid">
+            {copy.categories.map((category, index) => {
+              const theme = CATEGORY_THEMES[category.key] ?? CATEGORY_THEMES['forklift-propane']
+              return (
+                <button
+                  key={category.key}
+                  type="button"
+                  className={`category-card reveal delay-${(index % 6) + 1}`}
+                  style={{
+                    '--card-accent': theme.accent,
+                    '--card-accent-2': theme.accent2,
+                  }}
+                  onClick={() => setCategoryKey(category.key)}
+                >
+                  <span className="category-card-shine" aria-hidden="true" />
+                  <div className="category-card-media">
+                    <img
+                      src={category.image ?? getCategoryImageUrl(category.key)}
+                      data-fallback-src={getCategoryImageUrl(category.key)}
+                      alt={category.label}
+                      loading="lazy"
+                      onError={(event) => handleImageError(event, category.label)}
+                    />
+                    <span className="category-card-icon" aria-hidden="true">
+                      {theme.icon}
                     </span>
-                  </span>
-                </div>
-              </button>
-            )
-          })}
-        </div>
+                  </div>
+                  <div className="category-card-body">
+                    <span className="category-card-count">
+                      {categoryCounts[category.key] ?? 0}
+                    </span>
+                    <strong>{category.label}</strong>
+                    <p>{category.description}</p>
+                    <span className="category-card-cta">
+                      {copy.exploreCta}
+                      <span className="category-card-arrow" aria-hidden="true">
+                        →
+                      </span>
+                    </span>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          {copy.recommender ? (
+            <ForkliftRecommender
+              copy={copy.recommender}
+              products={allProducts}
+              locale={copy.locale}
+              currencyFormatter={currencyFormatter}
+              onViewProduct={handleViewRecommendedProduct}
+              onAddToCart={handleAddToCart}
+            />
+          ) : null}
+        </>
       ) : (
         <div className="category-drilldown">
           <div className="category-drilldown-header">
@@ -358,9 +404,21 @@ function ProductCatalog({ copy }) {
                     </div>
                     <div className="product-footer">
                       <strong>{currencyFormatter.format(product.price)}</strong>
-                      <Link className="btn primary btn-small" to="/client">
-                        {copy.buyCta}
-                      </Link>
+                      <div className="product-action-row">
+                        <button
+                          className={`btn primary btn-small${addedId === product.id ? ' btn-added' : ''}`}
+                          type="button"
+                          onClick={() => handleAddToCart(product)}
+                        >
+                          {addedId === product.id ? copy.addedCta : copy.buyCta}
+                        </button>
+                        <Link
+                          className="btn ghost btn-small"
+                          to={`/location?category=${encodeURIComponent(product.categoryKey)}`}
+                        >
+                          {copy.rentCta}
+                        </Link>
+                      </div>
                     </div>
                   </div>
                 </article>

@@ -1,5 +1,24 @@
 import { useState } from 'react'
 
+function buildGeocodeUrl(apiBase, form) {
+  const params = new URLSearchParams({
+    address: form.address.trim(),
+    city: form.city.trim(),
+    region: form.region.trim(),
+    postal_code: form.postalCode.trim(),
+    country: 'Canada',
+  })
+  return `${apiBase}/geocode/?${params.toString()}`
+}
+
+function isNetworkError(error) {
+  return (
+    error instanceof TypeError ||
+    error?.message === 'Failed to fetch' ||
+    error?.message?.includes('NetworkError')
+  )
+}
+
 function CompanyForm({ copy, apiBase, onCreated }) {
   const [form, setForm] = useState({
     name: '',
@@ -17,6 +36,62 @@ function CompanyForm({ copy, apiBase, onCreated }) {
 
   const updateField = (key, value) => {
     setForm((current) => ({ ...current, [key]: value }))
+    if (coords) {
+      setCoords(null)
+    }
+  }
+
+  const resolveCoordinates = async () => {
+    const address = form.address.trim()
+    const city = form.city.trim()
+    const region = form.region.trim()
+    const postalCode = form.postalCode.trim()
+
+    if (address.length < 3) {
+      throw new Error(copy.errorAddress)
+    }
+
+    const response = await fetch(buildGeocodeUrl(apiBase, form))
+    if (!response.ok) {
+      throw new Error(copy.errorGeocode)
+    }
+
+    const data = await response.json()
+    const resolved = {
+      lat: data.lat,
+      lng: data.lng,
+      display:
+        data.display ||
+        [address, city, region, postalCode, 'Canada'].filter(Boolean).join(', '),
+    }
+
+    setCoords(resolved)
+
+    if (!city && data.display) {
+      const parts = data.display.split(',').map((part) => part.trim())
+      if (parts.length >= 2) {
+        setForm((current) => ({
+          ...current,
+          city: current.city || parts[parts.length - 3] || current.city,
+          region: current.region || parts[parts.length - 2]?.slice(0, 2) || current.region,
+        }))
+      }
+    }
+
+    return resolved
+  }
+
+  const handleGeocode = async () => {
+    setGeoStatus('loading')
+    setError('')
+
+    try {
+      await resolveCoordinates()
+      setGeoStatus('success')
+    } catch (err) {
+      setError(isNetworkError(err) ? copy.errorBackendOffline : copy.errorGeocode)
+      setGeoStatus('idle')
+    }
   }
 
   const handleSubmit = async (event) => {
@@ -24,33 +99,44 @@ function CompanyForm({ copy, apiBase, onCreated }) {
     setStatus('loading')
     setError('')
 
-    if (!coords) {
-      setError(copy.errorCoords)
-      setStatus('idle')
-      return
-    }
-
-    const payload = {
+    const payloadBase = {
       name: form.name.trim(),
       email: form.email.trim(),
-      address: coords.display || `${form.address.trim()} ${form.postalCode.trim()}`.trim(),
       city: form.city.trim(),
       region: form.region.trim(),
       focus: form.focus.trim(),
-      lat: coords.lat,
-      lng: coords.lng,
     }
 
     if (
-      !payload.name ||
-      !payload.email ||
-      !payload.city ||
-      !payload.region ||
-      !payload.focus
+      !payloadBase.name ||
+      !payloadBase.email ||
+      !payloadBase.city ||
+      !payloadBase.region ||
+      !payloadBase.focus ||
+      !form.address.trim() ||
+      !form.postalCode.trim()
     ) {
       setError(copy.errorRequired)
       setStatus('idle')
       return
+    }
+
+    let resolvedCoords = coords
+    if (!resolvedCoords) {
+      try {
+        resolvedCoords = await resolveCoordinates()
+      } catch (err) {
+        setError(err.message || copy.errorCoords)
+        setStatus('idle')
+        return
+      }
+    }
+
+    const payload = {
+      ...payloadBase,
+      address: resolvedCoords.display || `${form.address.trim()} ${form.postalCode.trim()}`.trim(),
+      lat: resolvedCoords.lat,
+      lng: resolvedCoords.lng,
     }
 
     try {
@@ -80,44 +166,17 @@ function CompanyForm({ copy, apiBase, onCreated }) {
         postalCode: '',
       })
       setCoords(null)
+      setGeoStatus('idle')
       setStatus('success')
       onCreated()
     } catch (err) {
-      setError(copy.errorGeneric)
+      setError(isNetworkError(err) ? copy.errorBackendOffline : copy.errorGeneric)
       setStatus('idle')
     }
   }
 
-  const handleGeocode = async () => {
-    setGeoStatus('loading')
-    setError('')
-    const address = `${form.address} ${form.postalCode}`.trim()
-    if (address.length < 3) {
-      setError(copy.errorAddress)
-      setGeoStatus('idle')
-      return
-    }
-
-    try {
-      const response = await fetch(
-        `${apiBase}/geocode?address=${encodeURIComponent(address)}`
-      )
-      if (!response.ok) {
-        setError(copy.errorGeocode)
-        setGeoStatus('idle')
-        return
-      }
-      const data = await response.json()
-      setCoords({ lat: data.lat, lng: data.lng, display: data.display })
-      setGeoStatus('success')
-    } catch (err) {
-      setError(copy.errorGeocode)
-      setGeoStatus('idle')
-    }
-  }
-
   return (
-    <section className="company-form">
+    <section className="company-form" id="company-form">
       <div>
         <p className="eyebrow">{copy.eyebrow}</p>
         <h3>{copy.title}</h3>
@@ -208,7 +267,9 @@ function CompanyForm({ copy, apiBase, onCreated }) {
               {copy.coordsLabel} {coords.lat.toFixed(4)}, {coords.lng.toFixed(4)}
               {coords.display ? ` · ${coords.display}` : ''}
             </span>
-          ) : null}
+          ) : (
+            <span className="form-hint">{copy.autoLocateHint}</span>
+          )}
         </div>
         <div className="company-form-actions">
           <button className="btn primary" type="submit" disabled={status === 'loading'}>

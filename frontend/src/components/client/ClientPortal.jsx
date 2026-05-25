@@ -1,7 +1,16 @@
+import { Link, useNavigate } from 'react-router-dom'
 import FeatureGrid from '../common/FeatureGrid.jsx'
 import LogisticsMap from '../admin/LogisticsMap.jsx'
 
 function ClientPortal({ copy, features, mapCopy }) {
+  const navigate = useNavigate()
+
+  const handleFeatureAction = (feature) => {
+    if (feature.action === 'rental') {
+      navigate('/location')
+    }
+  }
+
   return (
     <section className="portal-section" id="client">
       <div className="portal-header">
@@ -11,15 +20,15 @@ function ClientPortal({ copy, features, mapCopy }) {
           <p className="section-subtitle">{copy.client.subtitle}</p>
         </div>
         <div className="portal-actions">
-          <button className="btn primary" type="button">
+          <Link className="btn primary" to="/">
             {copy.client.primaryCta}
-          </button>
-          <button className="btn ghost" type="button">
+          </Link>
+          <Link className="btn ghost" to="/location">
             {copy.client.secondaryCta}
-          </button>
+          </Link>
         </div>
       </div>
-      <FeatureGrid items={features} />
+      <FeatureGrid items={features} onItemClick={handleFeatureAction} />
       <LogisticsMap copy={mapCopy} />
     </section>
   )

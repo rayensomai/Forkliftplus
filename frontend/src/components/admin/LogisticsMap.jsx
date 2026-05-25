@@ -1,8 +1,7 @@
 import L from 'leaflet'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { MapContainer, Marker, Popup, TileLayer } from 'react-leaflet'
-import MarkerClusterGroup from 'react-leaflet-cluster'
+import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet'
 
 const seedCompanies = [
   {
@@ -73,12 +72,7 @@ const seedCompanies = [
   },
 ]
 
-const defaultCenter = [47.5, -72.0]
-const currentLocation = {
-  name: '2150 Boulevard Hymus, Dorval',
-  lat: 45.4876,
-  lng: -73.7329,
-}
+const defaultCenter = [52.0, -85.0]
 
 function getInitials(name) {
   return name
@@ -97,34 +91,47 @@ function getHue(name) {
   return hash
 }
 
-function LogisticsMap({ copy, refreshToken }) {
+function mergeCompanies(apiCompanies) {
+  if (apiCompanies.length) {
+    return [...apiCompanies].sort((a, b) => a.name.localeCompare(b.name))
+  }
+  return seedCompanies
+}
+
+function buildPinIcon(kind) {
+  return L.divIcon({
+    className: `map-pin ${kind}`,
+    html: '<span></span>',
+    iconSize: kind === 'active' ? [22, 22] : [14, 14],
+    iconAnchor: kind === 'active' ? [11, 11] : [7, 7],
+  })
+}
+
+function MapFocus({ target }) {
+  const map = useMap()
+
+  useEffect(() => {
+    if (!target) return
+    map.flyTo([target.lat, target.lng], Math.max(map.getZoom(), 9), { duration: 0.8 })
+  }, [map, target])
+
+  return null
+}
+
+function LogisticsMap({ copy, refreshToken, onCompaniesChange, focusCompanyId }) {
   const [query, setQuery] = useState('')
   const [companies, setCompanies] = useState(seedCompanies)
-  const [selectedCompanyId, setSelectedCompanyId] = useState(null)
+  const [selectedCompanyId, setSelectedCompanyId] = useState(focusCompanyId ?? null)
   const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
   const navigate = useNavigate()
 
-  const markerIcon = useMemo(
-    () =>
-      L.divIcon({
-        className: 'map-pin',
-        html: '<span></span>',
-        iconSize: [18, 18],
-        iconAnchor: [9, 9],
-      }),
-    []
-  )
+  const pinDefault = useMemo(() => buildPinIcon('default'), [])
+  const pinActive = useMemo(() => buildPinIcon('active'), [])
+  const pinMuted = useMemo(() => buildPinIcon('muted'), [])
 
-  const currentIcon = useMemo(
-    () =>
-      L.divIcon({
-        className: 'map-pin current',
-        html: '<span></span>',
-        iconSize: [20, 20],
-        iconAnchor: [10, 10],
-      }),
-    []
-  )
+  useEffect(() => {
+    if (focusCompanyId) setSelectedCompanyId(focusCompanyId)
+  }, [focusCompanyId])
 
   useEffect(() => {
     let isActive = true
@@ -132,94 +139,64 @@ function LogisticsMap({ copy, refreshToken }) {
 
     const fetchCompanies = async () => {
       try {
-        const response = await fetch(`${apiBase}/companies`, {
-          signal: controller.signal,
-        })
+        const response = await fetch(`${apiBase}/companies/`, { signal: controller.signal })
         if (!response.ok) return
         const data = await response.json()
-        if (isActive && Array.isArray(data) && data.length) {
-          setCompanies(data)
-        }
-      } catch (error) {
-        if (!controller.signal.aborted) {
-          return
+        if (!isActive || !Array.isArray(data)) return
+        const merged = mergeCompanies(data)
+        setCompanies(merged)
+        onCompaniesChange?.(merged)
+      } catch {
+        if (!controller.signal.aborted && isActive) {
+          setCompanies(seedCompanies)
+          onCompaniesChange?.(seedCompanies)
         }
       }
     }
 
     fetchCompanies()
-
     return () => {
       isActive = false
       controller.abort()
     }
-  }, [apiBase, refreshToken])
+  }, [apiBase, refreshToken, onCompaniesChange])
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
     if (!needle) return companies
     return companies.filter((company) => {
-      const content = `${company.name} ${company.city} ${company.region} ${company.focus}`
+      const content = `${company.name} ${company.city} ${company.region} ${company.focus} ${company.address} ${company.email}`
       return content.toLowerCase().includes(needle)
     })
   }, [companies, query])
 
-  const selectedCompany = useMemo(() => {
-    return companies.find((company) => company.id === selectedCompanyId) ?? null
-  }, [companies, selectedCompanyId])
+  const selectedCompany = useMemo(
+    () => companies.find((company) => company.id === selectedCompanyId) ?? null,
+    [companies, selectedCompanyId]
+  )
 
-  const suggestions = useMemo(() => filtered.slice(0, 6), [filtered])
+  const matchingIds = useMemo(() => new Set(filtered.map((company) => company.id)), [filtered])
+  const hasQuery = Boolean(query.trim())
 
   const center = useMemo(() => {
-    const points = filtered.length
-      ? filtered
-      : [{ lat: defaultCenter[0], lng: defaultCenter[1] }]
-    const allPoints = [...points, currentLocation]
-    const avgLat = allPoints.reduce((acc, item) => acc + item.lat, 0) / allPoints.length
-    const avgLng = allPoints.reduce((acc, item) => acc + item.lng, 0) / allPoints.length
-    return [avgLat, avgLng]
-  }, [filtered])
+    if (selectedCompany) return [selectedCompany.lat, selectedCompany.lng]
+    if (companies.length) {
+      const avgLat = companies.reduce((sum, item) => sum + item.lat, 0) / companies.length
+      const avgLng = companies.reduce((sum, item) => sum + item.lng, 0) / companies.length
+      return [avgLat, avgLng]
+    }
+    return defaultCenter
+  }, [companies, selectedCompany])
 
-  const handleQueryChange = (event) => {
-    setQuery(event.target.value)
-    setSelectedCompanyId(null)
+  const handleGoToCompany = (company) => {
+    setSelectedCompanyId(company.id)
+    setQuery(company.name)
+    navigate(`/collaboration/${company.id}`, { state: { company } })
   }
 
   const handleSelectCompany = (company) => {
     setSelectedCompanyId(company.id)
     setQuery(company.name)
-  }
-
-  const handleGoToCompany = (company) => {
-    setSelectedCompanyId(company.id)
-    setQuery(company.name)
-    navigate(`/collaboration/${company.id}`, {
-      state: { company },
-    })
-  }
-
-  const handleCollaboration = () => {
-    const targetCompany = selectedCompany ?? suggestions[0]
-    if (!targetCompany) return
-    navigate(`/collaboration/${targetCompany.id}`, {
-      state: { company: targetCompany },
-    })
-  }
-
-  const canCollaborate = Boolean(selectedCompany || (query.trim() && suggestions.length))
-  const partnerLogos = copy.partnerLogos ?? []
-
-  const handlePartnerLogoError = (event) => {
-    const target = event.currentTarget
-    if (target?.dataset?.fallbackApplied === '1') return
-
-    const src = target.getAttribute('src') || ''
-    if (!src) return
-
-    target.dataset.fallbackApplied = '1'
-    if (src.endsWith('.png')) {
-      target.src = src.replace(/\.png(\?.*)?$/i, '.svg$1')
-    }
   }
 
   return (
@@ -230,118 +207,36 @@ function LogisticsMap({ copy, refreshToken }) {
           <h3>{copy.title}</h3>
           <p className="section-subtitle">{copy.subtitle}</p>
         </div>
-        <div className="map-actions">
-          <div className="search-box">
-            <input
-              type="search"
-              placeholder={copy.searchPlaceholder}
-              value={query}
-              onChange={handleQueryChange}
-            />
-            {query.trim() ? (
-              <div className="search-suggestions" role="listbox" aria-label={copy.resultsLabel}>
-                {suggestions.length ? (
-                  suggestions.map((company) => (
-                    <button
-                      key={company.id}
-                      type="button"
-                      className={
-                        company.id === selectedCompanyId
-                          ? 'suggestion-item active'
-                          : 'suggestion-item'
-                      }
-                      onClick={() => handleGoToCompany(company)}
-                    >
-                      <span
-                        className="company-logo-badge"
-                        aria-hidden="true"
-                        style={{
-                          background: `linear-gradient(135deg, hsl(${getHue(company.name)} 76% 45%), hsl(${(getHue(company.name) + 32) % 360} 76% 34%))`,
-                        }}
-                      >
-                        {getInitials(company.name)}
-                      </span>
-                      <strong>{company.name}</strong>
-                      <span>
-                        {company.city}, {company.region}
-                      </span>
-                      <span>{company.address || copy.addressFallback}</span>
-                    </button>
-                  ))
-                ) : (
-                  <p className="suggestion-empty">{copy.noResults}</p>
-                )}
-              </div>
-            ) : null}
-          </div>
-          <button className="btn ghost" type="button" onClick={handleCollaboration} disabled={!canCollaborate}>
-            {copy.cta}
-          </button>
+        <div className="map-stats-pill">
+          <strong>{companies.length}</strong>
+          <span>{copy.totalPartners}</span>
         </div>
       </div>
-      {partnerLogos.length ? (
-        <section className="map-brand-billboard" aria-label={copy.partnerBrandsTitle || 'Marques partenaires'}>
-          <p className="footer-block-title">{copy.partnerBrandsTitle || 'Marques partenaires'}</p>
-          <div className="map-brand-stage">
-            {partnerLogos.map((brand, index) => (
-              <div
-                key={brand.name}
-                className="map-brand-item"
-                style={{ animationDelay: `${index * 2}s` }}
-              >
-                <img
-                  src={brand.logo}
-                  alt={brand.name}
-                  loading="lazy"
-                  onError={handlePartnerLogoError}
-                />
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
-      {selectedCompany ? (
-        <div className="selected-company-card">
-          <div
-            className="company-logo-badge large"
-            style={{
-              background: `linear-gradient(135deg, hsl(${getHue(selectedCompany.name)} 74% 48%), hsl(${(getHue(selectedCompany.name) + 34) % 360} 72% 36%))`,
-            }}
-          >
-            {getInitials(selectedCompany.name)}
-          </div>
-          <div className="selected-company-copy">
-            <p className="card-label">{copy.selectedLabel}</p>
-            <h4>{selectedCompany.name}</h4>
-            <p>{selectedCompany.email}</p>
-            <p>{selectedCompany.address || copy.addressFallback}</p>
-          </div>
-          <span className="selected-company-pill">{selectedCompany.city}</span>
-        </div>
-      ) : null}
-      <div className="map-layout">
+
+      <div className="map-workspace">
         <div className="map-board" aria-label="Logistics map">
-          <MapContainer center={center} zoom={5} scrollWheelZoom className="map-leaflet">
+          <MapContainer
+            center={center}
+            zoom={selectedCompany ? 10 : 4}
+            scrollWheelZoom
+            className="map-leaflet"
+          >
             <TileLayer
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
-            <Marker
-              position={[currentLocation.lat, currentLocation.lng]}
-              icon={currentIcon}
-            >
-              <Popup>
-                <strong>Position actuelle</strong>
-                <br />
-                {currentLocation.name}
-              </Popup>
-            </Marker>
-            <MarkerClusterGroup chunkedLoading>
-              {filtered.map((company) => (
+            <MapFocus target={selectedCompany} />
+            {companies.map((company) => {
+              const isActive = company.id === selectedCompanyId
+              const isMatch = !hasQuery || matchingIds.has(company.id)
+              const icon = isActive ? pinActive : isMatch ? pinDefault : pinMuted
+
+              return (
                 <Marker
                   key={company.id}
                   position={[company.lat, company.lng]}
-                  icon={markerIcon}
+                  icon={icon}
+                  eventHandlers={{ click: () => handleSelectCompany(company) }}
                 >
                   <Popup>
                     <strong>{company.name}</strong>
@@ -357,12 +252,81 @@ function LogisticsMap({ copy, refreshToken }) {
                         {company.email}
                       </>
                     ) : null}
+                    <br />
+                    <button
+                      className="btn primary btn-small map-popup-cta"
+                      type="button"
+                      onClick={() => handleGoToCompany(company)}
+                    >
+                      {copy.emailCta}
+                    </button>
                   </Popup>
                 </Marker>
-              ))}
-            </MarkerClusterGroup>
+              )
+            })}
           </MapContainer>
         </div>
+
+        <aside className="map-sidebar">
+          <div className="map-sidebar-search">
+            <input
+              type="search"
+              placeholder={copy.searchPlaceholder}
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value)
+                setSelectedCompanyId(null)
+              }}
+            />
+            <span className="map-sidebar-count">
+              {filtered.length} / {companies.length}
+            </span>
+          </div>
+
+          <div className="map-partner-list" role="list">
+            {filtered.length ? (
+              filtered.map((company) => (
+                <article
+                  key={company.id}
+                  className={`map-partner-card${company.id === selectedCompanyId ? ' active' : ''}`}
+                  role="listitem"
+                >
+                  <button
+                    type="button"
+                    className="map-partner-card-main"
+                    onClick={() => handleSelectCompany(company)}
+                  >
+                    <span
+                      className="company-logo-badge"
+                      aria-hidden="true"
+                      style={{
+                        background: `linear-gradient(135deg, hsl(${getHue(company.name)} 76% 45%), hsl(${(getHue(company.name) + 32) % 360} 76% 34%))`,
+                      }}
+                    >
+                      {getInitials(company.name)}
+                    </span>
+                    <div className="map-partner-card-copy">
+                      <strong>{company.name}</strong>
+                      <span>
+                        {company.city}, {company.region} · {company.focus}
+                      </span>
+                      <span>{company.address || copy.addressFallback}</span>
+                    </div>
+                  </button>
+                  <button
+                    className="btn primary btn-small map-partner-email"
+                    type="button"
+                    onClick={() => handleGoToCompany(company)}
+                  >
+                    {copy.emailCta}
+                  </button>
+                </article>
+              ))
+            ) : (
+              <p className="map-partner-empty">{copy.noResults}</p>
+            )}
+          </div>
+        </aside>
       </div>
     </section>
   )

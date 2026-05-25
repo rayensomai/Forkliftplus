@@ -1,26 +1,31 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
+import EmailPreview from '../components/collaboration/EmailPreview.jsx'
+import { getPromoShowcase } from '../data/promoShowcase.js'
 
-const promoShowcase = [
-  {
-    title: 'Chariot propane',
-    src: 'https://www.forkliftplus.com/wp-content/uploads/2023/05/Cat-2P5000.jpg',
-  },
-  {
-    title: 'Chariot electrique',
-    src: 'https://www.forkliftplus.com/wp-content/uploads/2024/06/electric-pallte-truck-home-1.jpg',
-  },
-  {
-    title: 'Chariot diesel',
-    src: 'https://www.forkliftplus.com/wp-content/uploads/2024/10/Skyjack-3219.jpg',
-  },
-]
+function getInitials(name) {
+  return name
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase()
+}
+
+function fillTemplate(template, data) {
+  return Object.entries(data).reduce(
+    (text, [key, value]) => text.replaceAll(`{${key}}`, value ?? ''),
+    template
+  )
+}
 
 function CollaborationPage({ copy }) {
   const { companyId } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
   const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  const collab = copy.collaboration
+
   const [company, setCompany] = useState(location.state?.company ?? null)
   const [recipientEmail, setRecipientEmail] = useState(location.state?.company?.email ?? '')
   const [subject, setSubject] = useState('')
@@ -31,14 +36,17 @@ function CollaborationPage({ copy }) {
   const [sendError, setSendError] = useState('')
   const [sendSuccess, setSendSuccess] = useState('')
 
+  const promoShowcase = useMemo(
+    () => getPromoShowcase(collab?.locale || 'fr-CA'),
+    [collab?.locale]
+  )
+
   useEffect(() => {
     let isActive = true
     const controller = new AbortController()
 
     const fetchCompany = async () => {
-      if (location.state?.company?.id === Number(companyId)) {
-        return
-      }
+      if (location.state?.company?.id === Number(companyId)) return
 
       setStatus('loading')
       setError('')
@@ -47,49 +55,48 @@ function CollaborationPage({ copy }) {
         const response = await fetch(`${apiBase}/companies/${companyId}`, {
           signal: controller.signal,
         })
-
-        if (!response.ok) {
-          throw new Error('Not found')
-        }
-
+        if (!response.ok) throw new Error('Not found')
         const data = await response.json()
         if (isActive) {
           setCompany(data)
           setRecipientEmail(data.email || '')
           setStatus('ready')
         }
-      } catch (fetchError) {
-        if (controller.signal.aborted) return
-        if (isActive) {
-          setStatus('error')
-          setError(copy.collaboration.error)
+      } catch {
+        if (controller.signal.aborted || !isActive) return
+        if (location.state?.company) {
+          setCompany(location.state.company)
+          setRecipientEmail(location.state.company.email || '')
+          setStatus('ready')
+          return
         }
+        setStatus('error')
+        setError(collab.error)
       }
     }
 
     fetchCompany()
-
     return () => {
       isActive = false
       controller.abort()
     }
-  }, [apiBase, companyId, copy.collaboration.error, location.state?.company])
+  }, [apiBase, companyId, collab.error, location.state?.company])
 
   useEffect(() => {
     if (!company) return
-    setSubject(
-      copy.collaboration.defaultSubject
-        .replace('{company}', company.name)
-        .replace('{focus}', company.focus || 'materiel de manutention')
-    )
-    setMessage(
-      copy.collaboration.defaultMessage
-        .replace('{company}', company.name)
-        .replace('{email}', company.email || '')
-        .replace('{city}', company.city || '')
-        .replace('{focus}', company.focus || '')
-    )
-  }, [company, copy.collaboration.defaultMessage, copy.collaboration.defaultSubject])
+
+    const data = {
+      company: company.name,
+      focus: company.focus || 'materiel de manutention',
+      email: company.email || '',
+      city: company.city || '',
+      region: company.region || '',
+      address: company.address || collab.addressFallback,
+    }
+
+    setSubject(fillTemplate(collab.defaultSubject, data))
+    setMessage(fillTemplate(collab.defaultMessage, data))
+  }, [company, collab])
 
   const handleSendEmail = async (event) => {
     event.preventDefault()
@@ -100,7 +107,7 @@ function CollaborationPage({ copy }) {
     const finalRecipientEmail = recipientEmail.trim()
 
     if (!finalSubject || !finalMessage || !finalRecipientEmail) {
-      setSendError(copy.collaboration.required)
+      setSendError(collab.required)
       setSendSuccess('')
       return
     }
@@ -110,7 +117,7 @@ function CollaborationPage({ copy }) {
     setSendSuccess('')
 
     try {
-      const response = await fetch(`${apiBase}/companies/${company.id}/collaboration-email`, {
+      const response = await fetch(`${apiBase}/companies/send-campaign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -118,113 +125,152 @@ function CollaborationPage({ copy }) {
           message: finalMessage,
           recipient_email: finalRecipientEmail,
           reply_to_email: 'info@forkliftplus.com',
+          company_id: company.id,
+          company_name: company.name,
+          company_email: company.email,
+          company_address: company.address || '',
+          company_city: company.city || '',
+          company_region: company.region || '',
+          company_focus: company.focus || '',
         }),
       })
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({}))
-        setSendError(data.detail || copy.collaboration.sendError)
+        const detail = typeof data.detail === 'string' ? data.detail : collab.sendError
+        if (detail.includes('535') || detail.includes('Username and Password')) {
+          setSendError(collab.smtpHint)
+        } else if (detail.includes('Email service unavailable')) {
+          setSendError(collab.smtpHint)
+        } else {
+          setSendError(detail)
+        }
         setSendState('idle')
         return
       }
 
+      const data = await response.json()
       setSendState('success')
-      setSendSuccess(copy.collaboration.sendSuccess)
-    } catch (sendError) {
-      setSendError(copy.collaboration.sendError)
+      if (data.delivery_mode === 'dev_inbox') {
+        setSendSuccess(
+          collab.sendSuccessDev
+            .replace('{email}', data.recipient || finalRecipientEmail)
+            .replace('{url}', data.dev_inbox_url || 'http://localhost:8000/dev/emails/view')
+        )
+      } else {
+        setSendSuccess(collab.sendSuccess.replace('{email}', data.recipient || finalRecipientEmail))
+      }
+    } catch {
+      setSendError(collab.sendError)
       setSendState('idle')
     }
   }
 
+  if (status === 'loading') {
+    return (
+      <section className="collab-studio collab-studio-loading">
+        <p>{collab.loading}</p>
+      </section>
+    )
+  }
+
+  if (status === 'error' || !company) {
+    return (
+      <section className="collab-studio collab-studio-error">
+        <p>{error || collab.error}</p>
+        <Link className="btn primary" to="/admin">
+          {collab.backCta}
+        </Link>
+      </section>
+    )
+  }
+
   return (
-    <section className="collaboration-page">
-      <div className="collaboration-hero">
-        <div>
-          <p className="eyebrow">{copy.collaboration.eyebrow}</p>
-          <h1>{copy.collaboration.title}</h1>
-          <p className="section-subtitle">{copy.collaboration.subtitle}</p>
+    <section className="collab-studio">
+      <div className="collab-studio-hero">
+        <div className="collab-studio-hero-copy">
+          <p className="eyebrow">{collab.eyebrow}</p>
+          <h1>{collab.title}</h1>
+          <p className="section-subtitle">{collab.subtitle}</p>
         </div>
-        <Link className="btn ghost" to="/admin">
-          {copy.collaboration.backCta}
+        <div className="collab-studio-partner-chip">
+          <span className="collab-studio-avatar">{getInitials(company.name)}</span>
+          <div>
+            <strong>{company.name}</strong>
+            <span>
+              {company.city}, {company.region}
+            </span>
+          </div>
+        </div>
+        <Link className="btn ghost collab-studio-back" to="/admin">
+          {collab.backCta}
         </Link>
       </div>
 
-      {status === 'loading' ? <p className="collaboration-status">{copy.collaboration.loading}</p> : null}
-      {status === 'error' ? <p className="collaboration-status error">{error}</p> : null}
+      <div className="collab-studio-layout">
+        <EmailPreview
+          company={company}
+          copy={collab}
+          promoShowcase={promoShowcase}
+          subject={subject}
+          message={message}
+        />
 
-      {company ? (
-        <div className="collaboration-card">
-          <div className="collaboration-company">
-            <p className="card-label">{copy.collaboration.companyLabel}</p>
-            <h2>{company.name}</h2>
-            <p>
-              {company.city}, {company.region} · {company.focus}
-            </p>
-            <p className="collaboration-email">{company.email}</p>
-            <p>{company.address || copy.collaboration.addressFallback}</p>
-            <div className="collaboration-preview">
-              <div className="collaboration-preview-header">
-                <p className="card-label">{copy.collaboration.previewLabel}</p>
-                <h3>{copy.collaboration.previewTitle}</h3>
-                <p>{copy.collaboration.previewSubtitle}</p>
-              </div>
-              <div className="collaboration-ribbon" aria-hidden="true">
-                <div className="collaboration-ribbon-track">
-                  {[...promoShowcase, ...promoShowcase].map((item, index) => (
-                    <div key={`${item.title}-${index}`} className="collaboration-ribbon-card">
-                      <img src={item.src} alt={item.title} />
-                      <span>{item.title}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <ul className="collaboration-bullets">
-                {copy.collaboration.benefits.map((benefit) => (
-                  <li key={benefit}>{benefit}</li>
-                ))}
-              </ul>
-            </div>
+        <aside className="collab-studio-panel">
+          <div className="collab-studio-panel-header">
+            <h2>{collab.panelTitle}</h2>
+            <p>{collab.panelSubtitle}</p>
           </div>
 
-          <form className="collaboration-form" onSubmit={handleSendEmail}>
+          <div className="collab-studio-value-grid">
+            {collab.valueCards.map((card) => (
+              <article key={card.title} className="collab-studio-value-card">
+                <span>{card.icon}</span>
+                <strong>{card.title}</strong>
+                <p>{card.text}</p>
+              </article>
+            ))}
+          </div>
+
+          <form className="collab-studio-form" onSubmit={handleSendEmail}>
             <label className="field">
-              <span>{copy.collaboration.recipientLabel}</span>
+              <span>{collab.recipientLabel}</span>
               <input
                 type="email"
                 value={recipientEmail}
                 onChange={(event) => setRecipientEmail(event.target.value)}
-                placeholder={copy.collaboration.recipientPlaceholder}
+                placeholder={collab.recipientPlaceholder}
               />
             </label>
             <label className="field">
-              <span>{copy.collaboration.subjectLabel}</span>
-              <input
-                type="text"
-                value={subject}
-                onChange={(event) => setSubject(event.target.value)}
-              />
+              <span>{collab.subjectLabel}</span>
+              <input type="text" value={subject} onChange={(event) => setSubject(event.target.value)} />
             </label>
             <label className="field">
-              <span>{copy.collaboration.messageLabel}</span>
-              <textarea
-                rows="8"
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-              />
+              <span>{collab.messageLabel}</span>
+              <textarea rows="10" value={message} onChange={(event) => setMessage(event.target.value)} />
             </label>
-            <div className="collaboration-actions">
-              <button className="btn primary" type="submit" disabled={sendState === 'loading'}>
-                {sendState === 'loading' ? copy.collaboration.sending : copy.collaboration.sendCta}
+
+            <div className="collab-studio-form-actions">
+              <button className="btn primary collab-studio-send" type="submit" disabled={sendState === 'loading'}>
+                {sendState === 'loading' ? collab.sending : collab.sendCta}
               </button>
               <button className="btn ghost" type="button" onClick={() => navigate(-1)}>
-                {copy.collaboration.returnCta}
+                {collab.returnCta}
               </button>
             </div>
+
             {sendSuccess ? <p className="form-success">{sendSuccess}</p> : null}
             {sendError ? <p className="form-error">{sendError}</p> : null}
           </form>
-        </div>
-      ) : null}
+
+          <ul className="collab-studio-tips">
+            {collab.tips.map((tip) => (
+              <li key={tip}>{tip}</li>
+            ))}
+          </ul>
+        </aside>
+      </div>
     </section>
   )
 }

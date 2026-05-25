@@ -1,6 +1,6 @@
-import smtplib
 from email.message import EmailMessage
 from html import escape
+from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -8,23 +8,42 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db import models
 from app.db.deps import get_db
-from app.schemas.company import CollaborationEmailIn, CompanyIn, CompanyOut
+from app.schemas.company import CampaignEmailIn, CollaborationEmailIn, CompanyIn, CompanyOut
+from app.services.email_sender import send_email_message
 
 router = APIRouter()
 
 
 PROMOTIONAL_SHOWCASE = [
   {
-    "src": "https://www.forkliftplus.com/wp-content/uploads/2020/01/propane-png.png",
-    "alt": "Chariot elevateur propane",
+    "src": "https://www.forkliftplus.com/wp-content/uploads/2023/05/Cat-2P5000.jpg",
+    "alt": "Chariot propane CAT 5 000 lb",
+    "tag": "Best-seller",
   },
   {
-    "src": "https://www.forkliftplus.com/wp-content/uploads/2020/01/Eelectric-Forklift.png",
-    "alt": "Chariot elevateur electrique",
+    "src": "https://www.forkliftplus.com/wp-content/uploads/2024/03/Lithium-Pallet-Truck-ELF-EPT33H.jpg",
+    "alt": "Chariot electrique lithium",
+    "tag": "Zero emission",
+  },
+  {
+    "src": "https://www.forkliftplus.com/wp-content/uploads/2024/06/electric-pallte-truck-home-1.jpg",
+    "alt": "Transpalette electrique ELF",
+    "tag": "Entrepot rapide",
+  },
+  {
+    "src": "https://www.forkliftplus.com/wp-content/uploads/2024/10/Skyjack-3219.jpg",
+    "alt": "Scissor lift Skyjack",
+    "tag": "Hauteur securisee",
   },
   {
     "src": "https://www.forkliftplus.com/wp-content/uploads/2020/01/Diesel-Forklift.png",
-    "alt": "Chariot elevateur diesel",
+    "alt": "Chariot diesel terrain exigeant",
+    "tag": "Puissance lourde",
+  },
+  {
+    "src": "https://www.forkliftplus.com/wp-content/uploads/2020/12/forklift-accessories-dark_a50df82e4e1563d904bf7b2af787fbdf-min.jpg",
+    "alt": "Accessoires et pieces OEM",
+    "tag": "Support total",
   },
 ]
 
@@ -44,6 +63,7 @@ def _build_promotional_html(company, subject: str, message_body: str) -> str:
       <div class=\"email-ribbon-card\">
         <img src=\"{escape(item['src'])}\" alt=\"{escape(item['alt'])}\" />
         <strong>{escape(item['alt'])}</strong>
+        <span>{escape(item.get('tag', 'ForkliftPlus'))}</span>
       </div>
     """
     for item in PROMOTIONAL_SHOWCASE
@@ -116,10 +136,10 @@ def _build_promotional_html(company, subject: str, message_body: str) -> str:
             </div>
           </div>
           <div class=\"pill-row\">
-            <span class=\"pill\">Machines à vendre</span>
-            <span class=\"pill\">Location flexible</span>
-            <span class=\"pill\">Support bilingue</span>
-            <span class=\"pill\">Livraison rapide</span>
+            <span class=\"pill\">Zero frais de demarrage</span>
+            <span class=\"pill\">Commission sur ventes</span>
+            <span class=\"pill\">Visibilite marketplace</span>
+            <span class=\"pill\">Support bilingue 24/7</span>
           </div>
         </div>
 
@@ -133,8 +153,8 @@ def _build_promotional_html(company, subject: str, message_body: str) -> str:
               </p>
               <div class=\"message-box\">{message_text}</div>
               <div class=\"cta-box\">
-                <strong>Pourquoi collaborer avec ForkliftPlus ?</strong>
-                <p style=\"margin:0;\">Un inventaire dynamique, des opportunités de vente, des machines prêtes à partir et un accompagnement rapide pour transformer chaque demande en contrat concret.</p>
+                <strong>Pourquoi dire oui a ForkliftPlus ?</strong>
+                <p style=\"margin:0;\">Visibilite premium, co-marketing anime, leads qualifies dans votre zone, inventaire dynamique et accompagnement bilingue — sans investissement initial de votre cote.</p>
               </div>
             </div>
             <div class=\"intro-card\">
@@ -168,7 +188,84 @@ def _build_promotional_html(company, subject: str, message_body: str) -> str:
 
 @router.get("/", response_model=list[CompanyOut])
 def list_companies(db: Session = Depends(get_db)):
-  return db.query(models.Company).order_by(models.Company.name).all()
+  # Companies are permanent records — no delete endpoint is exposed.
+  return db.query(models.Company).order_by(models.Company.id.asc()).all()
+
+
+def _resolve_company(db: Session, payload: CampaignEmailIn):
+  if payload.company_id:
+    company = db.query(models.Company).filter(models.Company.id == payload.company_id).first()
+    if company:
+      return company
+
+  if payload.company_name:
+    company = (
+      db.query(models.Company)
+      .filter(models.Company.name == payload.company_name.strip())
+      .first()
+    )
+    if company:
+      return company
+
+  return SimpleNamespace(
+    name=payload.company_name.strip(),
+    email=(payload.company_email or payload.recipient_email).strip(),
+    address=payload.company_address.strip(),
+    city=payload.company_city.strip(),
+    region=payload.company_region.strip(),
+    focus=payload.company_focus.strip() or "Partenaire logistique",
+  )
+
+
+def _send_campaign_email(company, recipient_email: str, subject: str, message_body: str, reply_to: str | None) -> str:
+  email_message = EmailMessage()
+  email_message["Subject"] = subject
+  email_message["From"] = settings.smtp_from_email
+  email_message["To"] = recipient_email
+  if reply_to:
+    email_message["Reply-To"] = reply_to
+
+  email_message.set_content(
+    f"Company: {company.name}\nAddress: {company.address}\nCity: {company.city}, {company.region}\nEmail: {company.email}\n\n{message_body}\n\nVoir la version HTML pour le rendu visuel."
+  )
+  email_message.add_alternative(
+    _build_promotional_html(company, subject, message_body),
+    subtype="html",
+  )
+  return send_email_message(email_message)
+
+
+@router.post("/send-campaign")
+def send_campaign_email(payload: CampaignEmailIn, db: Session = Depends(get_db)):
+  subject = payload.subject.strip()
+  message_body = payload.message.strip()
+  recipient_email = payload.recipient_email.strip()
+
+  if not subject or not message_body or not recipient_email:
+    raise HTTPException(status_code=400, detail="Subject, message, and recipient email are required")
+
+  company = _resolve_company(db, payload)
+
+  try:
+    delivery_mode = _send_campaign_email(
+      company,
+      recipient_email,
+      subject,
+      message_body,
+      payload.reply_to_email.strip() if payload.reply_to_email else None,
+    )
+  except HTTPException:
+    raise
+  except Exception as send_error:
+    raise HTTPException(
+      status_code=503,
+      detail=f"Email service unavailable: {send_error}",
+    ) from send_error
+
+  response = {"status": "sent", "company": company.name, "recipient": recipient_email, "delivery_mode": delivery_mode}
+  if delivery_mode == "dev_inbox":
+    response["dev_inbox_url"] = "http://localhost:8000/dev/emails/view"
+  return response
 
 
 @router.get("/{company_id}", response_model=CompanyOut)
@@ -189,44 +286,33 @@ def send_collaboration_email(
   if not company:
     raise HTTPException(status_code=404, detail="Company not found")
 
-  smtp_host = settings.smtp_host.strip() or "localhost"
-  smtp_port = settings.smtp_port or 1025
-
   subject = payload.subject.strip()
   message_body = payload.message.strip()
   if not subject or not message_body:
     raise HTTPException(status_code=400, detail="Subject and message are required")
 
-  email_message = EmailMessage()
-  email_message["Subject"] = subject
-  email_message["From"] = settings.smtp_from_email
   recipient_email = payload.recipient_email.strip() if payload.recipient_email else company.email
-  email_message["To"] = recipient_email
-  if payload.reply_to_email:
-    email_message["Reply-To"] = payload.reply_to_email.strip()
-
-  email_message.set_content(
-    f"Company: {company.name}\nAddress: {company.address}\nCity: {company.city}, {company.region}\nEmail: {company.email}\n\n{message_body}\n\nVoir la version HTML pour le rendu visuel."
-  )
-  email_message.add_alternative(
-    _build_promotional_html(company, subject, message_body),
-    subtype="html",
-  )
 
   try:
-    with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
-      if settings.smtp_use_tls:
-        server.starttls()
-      if settings.smtp_username:
-        server.login(settings.smtp_username, settings.smtp_password)
-      server.send_message(email_message)
+    delivery_mode = _send_campaign_email(
+      company,
+      recipient_email,
+      subject,
+      message_body,
+      payload.reply_to_email.strip() if payload.reply_to_email else None,
+    )
+  except HTTPException:
+    raise
   except Exception as send_error:
     raise HTTPException(
       status_code=503,
       detail=f"Email service unavailable: {send_error}",
     ) from send_error
 
-  return {"status": "sent", "company": company.name, "recipient": recipient_email}
+  response = {"status": "sent", "company": company.name, "recipient": recipient_email, "delivery_mode": delivery_mode}
+  if delivery_mode == "dev_inbox":
+    response["dev_inbox_url"] = "http://localhost:8000/dev/emails/view"
+  return response
 
 
 @router.post("/", response_model=CompanyOut, status_code=status.HTTP_201_CREATED)

@@ -104,14 +104,6 @@ const RAW_ITEMS = [
     power: 'Électrique',
   },
   {
-    title: 'Plaques de quai en aluminium',
-    price: '329.00',
-    img: 'https://www.forkliftplus.com/wp-content/uploads/2023/08/Aluminium-Dock-Plate-500x625-1.jpg',
-    link: 'https://www.forkliftplus.com/product/plaques-de-quai-en-aluminium/',
-    type: 'dock',
-    priceRange: '329 $ – 599 $',
-  },
-  {
     title: 'Transpalette Électrique CBD20KD',
     price: '5900.00',
     img: 'https://www.forkliftplus.com/wp-content/uploads/2023/06/cbd20kd-1-1.jpg',
@@ -173,7 +165,6 @@ const EN_TITLES = {
   'Transpalette semi-électrique à ciseaux ELF série EHP': 'ELF EHP semi-electric scissor pallet truck',
   'Transpalette électrique Batterie lithium série ELF-EPT': 'ELF-EPT lithium electric pallet truck series',
   'Transpalette électrique Toyota 8HBW23 4500 lb': 'Toyota 8HBW23 electric pallet jack 4,500 lb',
-  'Plaques de quai en aluminium': 'Aluminum dock plates',
   'Transpalette Électrique CBD20KD': 'CBD20KD electric pallet truck',
   'Transpalette Électrique Rider CBD20R-II': 'CBD20R-II electric rider pallet truck',
   'Transpalette électrique Jungheinrich EJE series': 'Jungheinrich EJE series electric pallet truck',
